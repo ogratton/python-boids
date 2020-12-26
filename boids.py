@@ -1,3 +1,5 @@
+# TODO fish shoal that avoids predators
+# TODO split rendering code
 # Copyright (c) 2012 Tom Marble
 # Licensed under the MIT license http://opensource.org/licenses/MIT
 # https://github.com/tmarble/pyboids/blob/master/boids.py
@@ -6,13 +8,16 @@
 which is an adaptation of
 http://www.cs.toronto.edu/~dt/siggraph97-course/cwr87/
 """
+from __future__ import annotations
 
+import math
 import random
+
 import pygame
 import pygame.locals as pyg
-import math
-
 from OpenGL import GL, GLU
+
+CONSTRAIN_TO_CUBE = False  # False for pac-man hypertaurus
 
 
 class CustomVector3:
@@ -20,38 +25,78 @@ class CustomVector3:
     numpy arrays aren't optimised for small lengths.
 
     This tries to replicate the bare pygame Vector3 behaviour we need
+
+    But it's slow as HELL
+
+    TODO just do it with numpy here anyway. It's probably still faster than this.
     """
+
     def __init__(self, x, y, z):
         self.x = x
         self.y = y
         self.z = z
 
     def length(self):
-        return math.sqrt(sum(map(lambda x: x**2, self)))
+        return self._length(*self)
+
+    @classmethod
+    def _length(cls, x, y, z):
+        return math.sqrt(sum(map(lambda a: a ** 2, (x, y, z))))
 
     def normalize(self):
         length = self.length()
-        return CustomVector3(self.x/length, self.y/length, self.z/length)
+        if not length:
+            raise ValueError("Can't normalize Vector of length Zero")
+        return CustomVector3(self.x / length, self.y / length, self.z / length)
+
+    def distance_to(self, other):
+        return self._length(*map(lambda x: x[0]-x[1], zip(self, other)))
+
+    def __add__(self, other):
+        return self._naive_op(other, lambda v: v[0]+v[1])
+
+    def __sub__(self, other):
+        return self._naive_op(other, lambda v: v[0]-v[1])
+
+    def __mul__(self, other):
+        if isinstance(other, (int, float,)):
+            return self._naive_op([other]*3, lambda v: v[0]*v[1])
+        raise NotImplementedError("too much maths")
+
+    def __truediv__(self, other):
+        if isinstance(other, (int, float,)):
+            return self._naive_op([other]*3, lambda v: v[0]/v[1])
+        raise TypeError("Can't divide two vectors")
+
+    def _naive_op(self, other, func):
+        return CustomVector3(*map(func, zip(self, other)))
 
     def __iter__(self):
         return iter((self.x, self.y, self.z))
 
-    def __repr__(self):
-        return "<Vector3(%s, %s, %s)>" % (self.x, self.y, self.z)
+    def __str__(self):
+        return str(list(self))
 
+    def __repr__(self):
+        return "<Vector3%s>" % (tuple(self),)
 
 try:
     from pygame.math import Vector3
 except ImportError:
+    print("Warning: using slow custom Vector3 class. Consider installing pygame")
     Vector3 = CustomVector3
 
 
-def random_vector3(lower=0.0, upper=1.0):
+def rand_vector3(lower=0.0, upper=1.0):
     return Vector3(
         random.uniform(lower, upper),
         random.uniform(lower, upper),
         random.uniform(lower, upper),
     )
+
+
+def zero_vector3():
+    return Vector3(0, 0, 0)
 
 
 class Rule:
@@ -62,7 +107,7 @@ class Rule:
     NEIGHBOURHOOD = 5  # max distance at which rule is applied
 
     def __init__(self):
-        self.change = Vector3(0, 0, 0)  # velocity correction
+        self.change = zero_vector3()  # velocity correction
         self.num = 0  # number of participants
 
     def accumulate(self, boid, other, distance):
@@ -84,16 +129,16 @@ class Cohesion(Rule):
     """
 
     def accumulate(self, boid, other, distance):
-        if other != boid:
-            self.change = self.change + other.location
-            self.num += 1
+        self.change += other.location
+        self.num += 1
 
     def add_adjustment(self, boid):
         if self.num > 0:
             centroid = self.change / self.num
             desired = centroid - boid.location
             self.change = (desired - boid.velocity) * 0.0006
-        boid.adjustment = boid.adjustment + self.change
+        # TODO just return the change
+        boid.adjustment += self.change
 
 
 class Alignment(Rule):
@@ -104,15 +149,14 @@ class Alignment(Rule):
     NEIGHBOURHOOD = 10
 
     def accumulate(self, boid, other, distance):
-        if other != boid:
-            self.change = self.change + other.velocity
-            self.num += 1
+        self.change += other.velocity
+        self.num += 1
 
     def add_adjustment(self, boid):
         if self.num > 0:
             group_velocity = self.change / self.num
             self.change = (group_velocity - boid.velocity) * 0.03
-        boid.adjustment = boid.adjustment + self.change
+        boid.adjustment += self.change
 
 
 class Separation(Rule):
@@ -121,25 +165,28 @@ class Separation(Rule):
     """
 
     def accumulate(self, boid, other, distance):
-        if other != boid:
-            separation = boid.location - other.location
-            if separation.length() > 0:
-                self.change = self.change + (separation.normalize() / distance)
-            self.num += 1
+        separation = boid.location - other.location
+        if distance > 0:
+            self.change += (separation.normalize() / distance)
+        self.num += 1
 
     def add_adjustment(self, boid):
         if self.change.length() > 0:
             group_separation = self.change / self.num
             self.change = (group_separation - boid.velocity) * 0.01
-        boid.adjustment = boid.adjustment + self.change
+        boid.adjustment += self.change
 
 
 class Boid:
-    def __init__(self):
-        self.color = random_vector3(0.5)  # R G B
-        self.location = Vector3(0, 0, 0)  # x y z
-        self.velocity = random_vector3(-1.0, 1.0)  # vx vy vz
-        self.adjustment = Vector3(0, 0, 0)  # to accumulate corrections
+    def __init__(self, b_id, behaviour: AbstractWallBehaviour):
+        self.id = b_id
+        self.behaviour = behaviour
+        self.color = rand_vector3(0.5)  # R G B
+        self.location = zero_vector3()  # x y z
+        self.velocity = rand_vector3(-1.0, 1.0)  # vx vy vz
+        self.adjustment = zero_vector3()  # to accumulate corrections
+
+        self.is_near_wall = False
 
     def __repr__(self):
         return "color %s, location %s, velocity %s" % (
@@ -148,38 +195,25 @@ class Boid:
             self.velocity,
         )
 
-    def wrap(self, cube0, cube1):
-        """
-        implement hypertaurus
-        """
-        loc = self.location
-        if loc.x < cube0.x:
-            loc.x = loc.x + (cube1.x - cube0.x)
-        elif loc.x > cube1.x:
-            loc.x = loc.x - (cube1.x - cube0.x)
-        if loc.y < cube0.y:
-            loc.y = loc.y + (cube1.y - cube0.y)
-        elif loc.y > cube1.y:
-            loc.y = loc.y - (cube1.y - cube0.y)
-        if loc.z < cube0.z:
-            loc.z = loc.z + (cube1.z - cube0.z)
-        elif loc.z > cube1.z:
-            loc.z = loc.z - (cube1.z - cube0.x)
-        self.location = loc
-
-    def orient(self, others):
+    def orient(self, boids):
         """
         Calculate new position
         """
         rules = [Cohesion(), Alignment(), Separation()]
-        for other in others:  # accumulate corrections
-            distance = self.location.distance_to(other.location)
+        for boid in boids:  # accumulate corrections
+            if self.id == boid.id:
+                continue
+
+            distance = self.location.distance_to(boid.location)
             for rule in rules:
                 if distance < rule.NEIGHBOURHOOD:
-                    rule.accumulate(self, other, distance)
-        self.adjustment = [0.0, 0.0, 0.0]  # reset adjustment vector
-        for rule in rules:  # save corrections to the adjustment
+                    rule.accumulate(self, boid, distance)
+        self.adjustment = zero_vector3()  # reset adjustment vector
+
+        for rule in rules:
             rule.add_adjustment(self)
+
+        self.behaviour.add_adjustment(self)  # TODO is this the right place?
 
     def limit_speed(self, max_speed):
         """
@@ -196,9 +230,11 @@ class Boid:
         # Hack: Add a constant velocity in whatever direction
         # they are moving so they don't ever stop.
         if self.velocity.length() > 0:
-            self.velocity += (self.velocity.normalize() * random.uniform(0.0, 0.007))
+            self.velocity += self.velocity.normalize() * random.uniform(0.0, 0.007)
         self.limit_speed(1.0)
         self.location += self.velocity
+
+        self.is_near_wall = self.behaviour.is_near_wall(self)
 
 
 class Flock:
@@ -206,12 +242,13 @@ class Flock:
     A flock of boids
     """
 
-    def __init__(self, num_boids, cube0, cube1):
-        self.cube0 = cube0  # cube min vertex
-        self.cube1 = cube1  # cube max vertex
+    def __init__(self, num_boids, cube_min, cube_max, behaviour: AbstractWallBehaviour):
+        self.cube_min = cube_min
+        self.cube_max = cube_max
+        self.behaviour = behaviour
         self.boids = []
-        for _ in range(num_boids):
-            self.boids.append(Boid())
+        for i in range(num_boids):
+            self.boids.append(Boid(i, behaviour))
 
     def update(self):
         """
@@ -221,13 +258,12 @@ class Flock:
             boid.orient(self.boids)  # calculate new velocity
         for boid in self.boids:
             boid.update()  # move to new position
-            boid.wrap(self.cube0, self.cube1)
 
     def __repr__(self):
         rep = "Flock of %d boids bounded by %s, %s:\n" % (
             len(self.boids),
-            self.cube0,
-            self.cube1,
+            self.cube_min,
+            self.cube_max,
         )
         for i, b in enumerate(self.boids):
             rep += "%3d: %s\n" % (i, b)
@@ -238,10 +274,10 @@ class Flock:
         loop of points defining top square
         """
         return [
-            [self.cube0.x, self.cube0.y, self.cube1.z],
-            [self.cube0.x, self.cube1.y, self.cube1.z],
-            [self.cube1.x, self.cube1.y, self.cube1.z],
-            [self.cube1.x, self.cube0.y, self.cube1.z],
+            [self.cube_min.x, self.cube_min.y, self.cube_max.z],
+            [self.cube_min.x, self.cube_max.y, self.cube_max.z],
+            [self.cube_max.x, self.cube_max.y, self.cube_max.z],
+            [self.cube_max.x, self.cube_min.y, self.cube_max.z],
         ]
 
     def bottom_square(self):
@@ -249,10 +285,10 @@ class Flock:
         loop of points defining bottom square
         """
         return [
-            [self.cube0.x, self.cube0.y, self.cube0.z],
-            [self.cube0.x, self.cube1.y, self.cube0.z],
-            [self.cube1.x, self.cube1.y, self.cube0.z],
-            [self.cube1.x, self.cube0.y, self.cube0.z],
+            [self.cube_min.x, self.cube_min.y, self.cube_min.z],
+            [self.cube_min.x, self.cube_max.y, self.cube_min.z],
+            [self.cube_max.x, self.cube_max.y, self.cube_min.z],
+            [self.cube_max.x, self.cube_min.y, self.cube_min.z],
         ]
 
     def vertical_lines(self):
@@ -260,32 +296,15 @@ class Flock:
         point pairs defining vertical lines of the cube
         """
         return [
-            [self.cube0.x, self.cube0.y, self.cube0.z],
-            [self.cube0.x, self.cube0.y, self.cube1.z],
-            [self.cube0.x, self.cube1.y, self.cube0.z],
-            [self.cube0.x, self.cube1.y, self.cube1.z],
-            [self.cube1.x, self.cube1.y, self.cube0.z],
-            [self.cube1.x, self.cube1.y, self.cube1.z],
-            [self.cube1.x, self.cube0.y, self.cube0.z],
-            [self.cube1.x, self.cube0.y, self.cube1.z],
+            [self.cube_min.x, self.cube_min.y, self.cube_min.z],
+            [self.cube_min.x, self.cube_min.y, self.cube_max.z],
+            [self.cube_min.x, self.cube_max.y, self.cube_min.z],
+            [self.cube_min.x, self.cube_max.y, self.cube_max.z],
+            [self.cube_max.x, self.cube_max.y, self.cube_min.z],
+            [self.cube_max.x, self.cube_max.y, self.cube_max.z],
+            [self.cube_max.x, self.cube_min.y, self.cube_min.z],
+            [self.cube_max.x, self.cube_min.y, self.cube_max.z],
         ]
-
-    def render(self):
-        """
-        draw a flock of boids
-        """
-        self.render_cube()
-        GL.glBegin(GL.GL_LINES)
-        for boid in self.boids:
-            GL.glColor(*boid.color)
-            GL.glVertex(*boid.location)
-            if boid.velocity.length() > 0:
-                # head = boid.location + boid.velocity.normalize()
-                head = boid.location + boid.velocity.normalize() * 3
-            else:
-                head = boid.location
-            GL.glVertex(head.x, head.y, head.z)
-        GL.glEnd()
 
     def render_cube(self):
         """
@@ -308,8 +327,77 @@ class Flock:
             GL.glVertex(point)
         GL.glEnd()
 
+    def render(self):
+        """
+        draw a flock of boids
+        """
+        self.render_cube()
+        GL.glBegin(GL.GL_LINES)
+        for boid in self.boids:
+            GL.glColor(*boid.color)
+            GL.glVertex(*boid.location)
+            if boid.velocity.length() > 0:
+                head = boid.location + boid.velocity.normalize() * 3
+            else:
+                head = boid.location
+            GL.glVertex(head.x, head.y, head.z)
+        GL.glEnd()
+
+
+class AbstractWallBehaviour:
+
+    def __init__(self, cube_min, cube_max):
+        self.cube_min = cube_min
+        self.cube_max = cube_max
+
+    def is_near_wall(self, boid: Boid) -> bool:
+        raise NotImplementedError
+
+    def add_adjustment(self, boid: Boid):
+        raise NotImplementedError
+
+
+class WrapBehaviour(AbstractWallBehaviour):
+
+    def is_near_wall(self, boid):
+        return False
+
+    def add_adjustment(self, boid: Boid):
+        loc = boid.location
+        if loc.x < self.cube_min.x:
+            loc.x = loc.x + (self.cube_max.x - self.cube_min.x)
+        elif loc.x > self.cube_max.x:
+            loc.x = loc.x - (self.cube_max.x - self.cube_min.x)
+        if loc.y < self.cube_min.y:
+            loc.y = loc.y + (self.cube_max.y - self.cube_min.y)
+        elif loc.y > self.cube_max.y:
+            loc.y = loc.y - (self.cube_max.y - self.cube_min.y)
+        if loc.z < self.cube_min.z:
+            loc.z = loc.z + (self.cube_max.z - self.cube_min.z)
+        elif loc.z > self.cube_max.z:
+            loc.z = loc.z - (self.cube_max.z - self.cube_min.x)
+        boid.location = loc  # TODO this is just changing the location, but it's probably fine
+
+
+class BoundBehaviour(AbstractWallBehaviour):
+
+    def is_near_wall(self, boid):
+        return any([abs(coord) >= EDGE * 0.95 for coord in boid.location])
+
+    def add_adjustment(self, boid: Boid):
+        change = zero_vector3()
+        if boid.is_near_wall:
+            # TODO assumes centre is 0,0,0
+            direction = zero_vector3() - boid.location
+            # TODO make it a more gradual turn
+            change = direction * 0.005
+        boid.adjustment += change
+
 
 def main():
+
+    random.seed(1)
+
     # initialize pygame and setup an opengl display
     #  angle = 0.4  # camera rotation angle
     angle = 0.1  # camera rotation angle
@@ -327,17 +415,19 @@ def main():
     GL.glMatrixMode(GL.GL_PROJECTION)
     GL.glLoadIdentity()
     # GLU.gluPerspective(60.0, xyratio, 1.0, 250.0)   # setup lens
-    edge = 50
-    GLU.gluPerspective(60.0, xyratio, 1.0, (6 * edge) + 10)  # setup lens
+    GLU.gluPerspective(60.0, xyratio, 1.0, (6 * EDGE) + 10)  # setup lens
     GL.glMatrixMode(GL.GL_MODELVIEW)
     GL.glLoadIdentity()
     # GLU.gluLookAt(0.0, 0.0, 150, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
-    GLU.gluLookAt(0.0, 0.0, 3 * edge, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    GLU.gluLookAt(0.0, 0.0, 3 * EDGE, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
     GL.glPointSize(3.0)
-    cube0 = Vector3(-edge, -edge, -edge)  # cube min vertex
-    cube1 = Vector3(+edge, +edge, +edge)  # cube max vertex
-    flock = Flock(200, cube0, cube1)
-    # print(flock)
+    cube_min_vertex = Vector3(-EDGE, -EDGE, -EDGE)
+    cube_max_vertex = Vector3(+EDGE, +EDGE, +EDGE)
+    behaviour_class = BoundBehaviour if CONSTRAIN_TO_CUBE else WrapBehaviour
+    behaviour = behaviour_class(cube_min_vertex, cube_max_vertex)
+    # TODO the speed of the program is dependant on the number of boids
+    #   this is really dumb
+    flock = Flock(200, cube_min_vertex, cube_max_vertex, behaviour)
     while True:
         event = pygame.event.poll()
         if event.type == pyg.QUIT or (
