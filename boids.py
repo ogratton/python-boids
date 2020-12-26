@@ -10,9 +10,40 @@ http://www.cs.toronto.edu/~dt/siggraph97-course/cwr87/
 import random
 import pygame
 import pygame.locals as pyg
-from pygame.math import Vector3  # TODO replace with numpy
+import math
 
 from OpenGL import GL, GLU
+
+
+class CustomVector3:
+    """
+    numpy arrays aren't optimised for small lengths.
+
+    This tries to replicate the bare pygame Vector3 behaviour we need
+    """
+    def __init__(self, x, y, z):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def length(self):
+        return math.sqrt(sum(map(lambda x: x**2, self)))
+
+    def normalize(self):
+        length = self.length()
+        return CustomVector3(self.x/length, self.y/length, self.z/length)
+
+    def __iter__(self):
+        return iter((self.x, self.y, self.z))
+
+    def __repr__(self):
+        return "<Vector3(%s, %s, %s)>" % (self.x, self.y, self.z)
+
+
+try:
+    from pygame.math import Vector3
+except ImportError:
+    Vector3 = CustomVector3
 
 
 def random_vector3(lower=0.0, upper=1.0):
