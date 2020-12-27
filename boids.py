@@ -1,5 +1,6 @@
 # TODO fish shoal that avoids predators
 # TODO split rendering code
+# TODO hypertaurus is probably better for lights
 # Copyright (c) 2012 Tom Marble
 # Licensed under the MIT license http://opensource.org/licenses/MIT
 # https://github.com/tmarble/pyboids/blob/master/boids.py
@@ -12,12 +13,16 @@ from __future__ import annotations
 
 import math
 import random
+import time
 
 import pygame
 import pygame.locals as pyg
 from OpenGL import GL, GLU
 
 CONSTRAIN_TO_CUBE = False  # False for pac-man hypertaurus
+EDGE = 50  # cube size
+UPDATE_INTERVAL = 0.03
+NUM_BOIDS = 150
 
 
 class CustomVector3:
@@ -50,22 +55,34 @@ class CustomVector3:
         return CustomVector3(self.x / length, self.y / length, self.z / length)
 
     def distance_to(self, other):
-        return self._length(*map(lambda x: x[0]-x[1], zip(self, other)))
+        return self._length(*map(lambda x: x[0] - x[1], zip(self, other)))
 
     def __add__(self, other):
-        return self._naive_op(other, lambda v: v[0]+v[1])
+        return self._naive_op(other, lambda v: v[0] + v[1])
 
     def __sub__(self, other):
-        return self._naive_op(other, lambda v: v[0]-v[1])
+        return self._naive_op(other, lambda v: v[0] - v[1])
 
     def __mul__(self, other):
-        if isinstance(other, (int, float,)):
-            return self._naive_op([other]*3, lambda v: v[0]*v[1])
+        if isinstance(
+            other,
+            (
+                int,
+                float,
+            ),
+        ):
+            return self._naive_op([other] * 3, lambda v: v[0] * v[1])
         raise NotImplementedError("too much maths")
 
     def __truediv__(self, other):
-        if isinstance(other, (int, float,)):
-            return self._naive_op([other]*3, lambda v: v[0]/v[1])
+        if isinstance(
+            other,
+            (
+                int,
+                float,
+            ),
+        ):
+            return self._naive_op([other] * 3, lambda v: v[0] / v[1])
         raise TypeError("Can't divide two vectors")
 
     def _naive_op(self, other, func):
@@ -79,6 +96,7 @@ class CustomVector3:
 
     def __repr__(self):
         return "<Vector3%s>" % (tuple(self),)
+
 
 try:
     from pygame.math import Vector3
@@ -167,7 +185,7 @@ class Separation(Rule):
     def accumulate(self, boid, other, distance):
         separation = boid.location - other.location
         if distance > 0:
-            self.change += (separation.normalize() / distance)
+            self.change += separation.normalize() / distance
         self.num += 1
 
     def add_adjustment(self, boid):
@@ -254,10 +272,23 @@ class Flock:
         """
         update flock positions
         """
+        t_0 = time.time()
+
         for boid in self.boids:
             boid.orient(self.boids)  # calculate new velocity
         for boid in self.boids:
             boid.update()  # move to new position
+
+        t_1 = time.time()
+        computation_time = t_1 - t_0
+        time_to_sleep = UPDATE_INTERVAL - computation_time
+        if time_to_sleep < 0:
+            print(
+                "WARNING: computation took %s (> %s)"
+                % (computation_time, UPDATE_INTERVAL)
+            )
+        else:
+            time.sleep(time_to_sleep)
 
     def __repr__(self):
         rep = "Flock of %d boids bounded by %s, %s:\n" % (
@@ -273,65 +304,54 @@ class Flock:
         """
         loop of points defining top square
         """
-        return [
-            [self.cube_min.x, self.cube_min.y, self.cube_max.z],
-            [self.cube_min.x, self.cube_max.y, self.cube_max.z],
-            [self.cube_max.x, self.cube_max.y, self.cube_max.z],
-            [self.cube_max.x, self.cube_min.y, self.cube_max.z],
-        ]
+        return self.square_abstract(self.cube_min, self.cube_max, self.cube_max.z)
 
     def bottom_square(self):
         """
         loop of points defining bottom square
         """
+        return self.square_abstract(self.cube_min, self.cube_max, self.cube_min.z)
+
+    @staticmethod
+    def square_abstract(a, b, z):
         return [
-            [self.cube_min.x, self.cube_min.y, self.cube_min.z],
-            [self.cube_min.x, self.cube_max.y, self.cube_min.z],
-            [self.cube_max.x, self.cube_max.y, self.cube_min.z],
-            [self.cube_max.x, self.cube_min.y, self.cube_min.z],
+            [a.x, a.y, z],
+            [a.x, b.y, z],
+            [b.x, b.y, z],
+            [b.x, a.y, z],
         ]
 
-    def vertical_lines(self):
+    @staticmethod
+    def vertical_lines(top, bottom):
         """
         point pairs defining vertical lines of the cube
         """
-        return [
-            [self.cube_min.x, self.cube_min.y, self.cube_min.z],
-            [self.cube_min.x, self.cube_min.y, self.cube_max.z],
-            [self.cube_min.x, self.cube_max.y, self.cube_min.z],
-            [self.cube_min.x, self.cube_max.y, self.cube_max.z],
-            [self.cube_max.x, self.cube_max.y, self.cube_min.z],
-            [self.cube_max.x, self.cube_max.y, self.cube_max.z],
-            [self.cube_max.x, self.cube_min.y, self.cube_min.z],
-            [self.cube_max.x, self.cube_min.y, self.cube_max.z],
-        ]
+        for t, b in zip(top, bottom):
+            yield t
+            yield b
 
-    def render_cube(self):
+    @staticmethod
+    def render_boundary(*box_coords):
         """
         Draw the bounding cube
         """
+        top, bottom, lines = box_coords
+
         GL.glColor(0.5, 0.5, 0.5)
-        # XY plane, positive Z
-        GL.glBegin(GL.GL_LINE_LOOP)
-        for point in self.top_square():
-            GL.glVertex(point)
-        GL.glEnd()
-        # XY plane, negative Z
-        GL.glBegin(GL.GL_LINE_LOOP)
-        for point in self.bottom_square():
-            GL.glVertex(point)
-        GL.glEnd()
+        for loop in (top, bottom):
+            GL.glBegin(GL.GL_LINE_LOOP)
+            for point in loop:
+                GL.glVertex(point)
+            GL.glEnd()
+
         # The connecting lines in the Z direction
         GL.glBegin(GL.GL_LINES)
-        for point in self.vertical_lines():
+        for point in lines:
             GL.glVertex(point)
         GL.glEnd()
 
-    def render(self):
-        """
-        draw a flock of boids
-        """
-        self.render_cube()
+    def render(self, *box_coords):
+        self.render_boundary(*box_coords)
         GL.glBegin(GL.GL_LINES)
         for boid in self.boids:
             GL.glColor(*boid.color)
@@ -345,6 +365,9 @@ class Flock:
 
 
 class AbstractWallBehaviour:
+    """
+    What to do when a boid is near the edge of its container
+    """
 
     def __init__(self, cube_min, cube_max):
         self.cube_min = cube_min
@@ -358,6 +381,9 @@ class AbstractWallBehaviour:
 
 
 class WrapBehaviour(AbstractWallBehaviour):
+    """
+    Wrap round to the opposite side like pac-man
+    """
 
     def is_near_wall(self, boid):
         return False
@@ -376,10 +402,15 @@ class WrapBehaviour(AbstractWallBehaviour):
             loc.z = loc.z + (self.cube_max.z - self.cube_min.z)
         elif loc.z > self.cube_max.z:
             loc.z = loc.z - (self.cube_max.z - self.cube_min.x)
-        boid.location = loc  # TODO this is just changing the location, but it's probably fine
+        boid.location = (
+            loc  # TODO this is just changing the location, but it's probably fine
+        )
 
 
 class BoundBehaviour(AbstractWallBehaviour):
+    """
+    Start turning towards the centre
+    """
 
     def is_near_wall(self, boid):
         return any([abs(coord) >= EDGE * 0.95 for coord in boid.location])
@@ -414,20 +445,22 @@ def main():
     # setup the camera
     GL.glMatrixMode(GL.GL_PROJECTION)
     GL.glLoadIdentity()
-    # GLU.gluPerspective(60.0, xyratio, 1.0, 250.0)   # setup lens
     GLU.gluPerspective(60.0, xyratio, 1.0, (6 * EDGE) + 10)  # setup lens
     GL.glMatrixMode(GL.GL_MODELVIEW)
     GL.glLoadIdentity()
-    # GLU.gluLookAt(0.0, 0.0, 150, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
     GLU.gluLookAt(0.0, 0.0, 3 * EDGE, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
     GL.glPointSize(3.0)
     cube_min_vertex = Vector3(-EDGE, -EDGE, -EDGE)
     cube_max_vertex = Vector3(+EDGE, +EDGE, +EDGE)
     behaviour_class = BoundBehaviour if CONSTRAIN_TO_CUBE else WrapBehaviour
     behaviour = behaviour_class(cube_min_vertex, cube_max_vertex)
-    # TODO the speed of the program is dependant on the number of boids
-    #   this is really dumb
-    flock = Flock(200, cube_min_vertex, cube_max_vertex, behaviour)
+    flock = Flock(NUM_BOIDS, cube_min_vertex, cube_max_vertex, behaviour)
+
+    square_top = flock.top_square()
+    square_bottom = flock.bottom_square()
+    square_lines = list(flock.vertical_lines(square_top, square_bottom))
+    square_coords = (square_top, square_bottom, square_lines)
+
     while True:
         event = pygame.event.poll()
         if event.type == pyg.QUIT or (
@@ -436,7 +469,7 @@ def main():
         ):
             break
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-        flock.render()
+        flock.render(*square_coords)
         GL.glRotatef(angle, 0, 1, 0)  # orbit camera around by angle
         pygame.display.flip()
         if delay > 0:
