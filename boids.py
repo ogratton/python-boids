@@ -29,10 +29,11 @@ SEPARATION_WEIGHT = 0.05
 BOUND_WEIGHT = 0.001
 
 CONSTRAIN_TO_CUBE = True  # False for pac-man wrapping
-EDGE = 15  # cube size
+RADIUS = 15  # bad name, but half of cube edge length
 UPDATE_INTERVAL = 0.032
 NUM_BOIDS = 150
 BASE_SPEED = 0.03
+RAND_POINT_STD_DEV = 7.5
 
 
 class CustomVector3:
@@ -117,6 +118,12 @@ def rand_vector3(lower=0.0, upper=1.0):
         random.uniform(lower, upper),
         random.uniform(lower, upper),
     )
+
+
+def rand_point_in_cube(radius, min_vertex):
+    rand_unit_point = rand_vector3()
+    scaled_point = rand_unit_point * radius * 2
+    return scaled_point + min_vertex
 
 
 def zero_vector3():
@@ -206,11 +213,11 @@ class Separation(Rule):
 
 
 class Boid:
-    def __init__(self, b_id, behaviour: AbstractWallBehaviour):
+    def __init__(self, b_id, behaviour: AbstractWallBehaviour, starting_pos=None):
         self.id = b_id
         self.behaviour = behaviour
         self.color = rand_vector3(0.3, 0.7)  # R G B
-        self.location = zero_vector3()  # x y z
+        self.location = starting_pos or zero_vector3()
         self.velocity = rand_vector3(-1.0, 1.0)  # vx vy vz
         self.adjustment = zero_vector3()  # to accumulate corrections
 
@@ -276,7 +283,8 @@ class Flock:
         self.behaviour = behaviour
         self.boids = []
         for i in range(num_boids):
-            self.boids.append(Boid(i, behaviour))
+            starting_pos = rand_point_in_cube(RADIUS, cube_min)
+            self.boids.append(Boid(i, behaviour, starting_pos=starting_pos))
 
     def update(self):
         """
@@ -356,7 +364,7 @@ class BoundBehaviour(AbstractWallBehaviour):
 
     def is_near_wall(self, boid):
         # TODO assumes centre is 0,0,0
-        return any([abs(coord) >= EDGE * BOUND_RANGE_RATIO for coord in boid.location])
+        return any([abs(coord) >= RADIUS * BOUND_RANGE_RATIO for coord in boid.location])
 
     def add_adjustment(self, boid):
         change = zero_vector3()
@@ -459,13 +467,13 @@ def main():
     # setup the camera
     GL.glMatrixMode(GL.GL_PROJECTION)
     GL.glLoadIdentity()
-    GLU.gluPerspective(60.0, xyratio, 1.0, (6 * EDGE) + 10)  # setup lens
+    GLU.gluPerspective(60.0, xyratio, 1.0, (6 * RADIUS) + 10)  # setup lens
     GL.glMatrixMode(GL.GL_MODELVIEW)
     GL.glLoadIdentity()
-    GLU.gluLookAt(0.0, 0.0, 3 * EDGE, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    GLU.gluLookAt(0.0, 0.0, 3 * RADIUS, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
     GL.glPointSize(3.0)
-    cube_min_vertex = Vector3(-EDGE, -EDGE, -EDGE)
-    cube_max_vertex = Vector3(+EDGE, +EDGE, +EDGE)
+    cube_min_vertex = Vector3(-RADIUS, -RADIUS, -RADIUS)
+    cube_max_vertex = Vector3(+RADIUS, +RADIUS, +RADIUS)
     behaviour_class = BoundBehaviour if CONSTRAIN_TO_CUBE else WrapBehaviour
     behaviour = behaviour_class(cube_min_vertex, cube_max_vertex)
     flock = Flock(NUM_BOIDS, cube_min_vertex, cube_max_vertex, behaviour)
