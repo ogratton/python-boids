@@ -1,6 +1,5 @@
 # TODO fish shoal that avoids predators
 # TODO split rendering code
-# TODO hypertaurus is probably better for lights
 # Copyright (c) 2012 Tom Marble
 # Licensed under the MIT license http://opensource.org/licenses/MIT
 # https://github.com/tmarble/pyboids/blob/master/boids.py
@@ -19,21 +18,28 @@ import pygame
 import pygame.locals as pyg
 from OpenGL import GL, GLU
 
-CONSTRAIN_TO_CUBE = False  # False for pac-man hypertaurus
-EDGE = 50  # cube size
+COHESION_RANGE = 10
+ALIGNMENT_RANGE = 10
+SEPARATION_RANGE = 10
+BOUND_RANGE_RATIO = 0.8  # Point at which boids start turning round
+
+COHESION_WEIGHT = 0.001
+ALIGNMENT_WEIGHT = 0.04
+SEPARATION_WEIGHT = 0.05
+BOUND_WEIGHT = 0.001
+
+CONSTRAIN_TO_CUBE = True  # False for pac-man wrapping
+EDGE = 15  # cube size
 UPDATE_INTERVAL = 0.03
 NUM_BOIDS = 150
+BASE_SPEED = 0.03
 
 
 class CustomVector3:
     """
     numpy arrays aren't optimised for small lengths.
-
-    This tries to replicate the bare pygame Vector3 behaviour we need
-
-    But it's slow as HELL
-
-    TODO just do it with numpy here anyway. It's probably still faster than this.
+    This tries to replicate the bare pygame Vector3 behaviour we need.
+    It's way way slower, but it's still better than numpy.
     """
 
     def __init__(self, x, y, z):
@@ -122,7 +128,8 @@ class Rule:
     Template for rules of flocking
     """
 
-    NEIGHBOURHOOD = 5  # max distance at which rule is applied
+    # max distance at which rule is applied
+    RANGE = NotImplemented
 
     def __init__(self):
         self.change = zero_vector3()  # velocity correction
@@ -146,6 +153,8 @@ class Cohesion(Rule):
     Rule 1: Boids try to fly towards the centre of mass of neighbouring boids.
     """
 
+    RANGE = COHESION_RANGE
+
     def accumulate(self, boid, other, distance):
         self.change += other.location
         self.num += 1
@@ -154,8 +163,7 @@ class Cohesion(Rule):
         if self.num > 0:
             centroid = self.change / self.num
             desired = centroid - boid.location
-            self.change = (desired - boid.velocity) * 0.0006
-        # TODO just return the change
+            self.change = (desired - boid.velocity) * COHESION_WEIGHT
         boid.adjustment += self.change
 
 
@@ -164,7 +172,7 @@ class Alignment(Rule):
     Rule 2: Boids try to match velocity with near boids.
     """
 
-    NEIGHBOURHOOD = 10
+    RANGE = ALIGNMENT_RANGE
 
     def accumulate(self, boid, other, distance):
         self.change += other.velocity
@@ -173,7 +181,7 @@ class Alignment(Rule):
     def add_adjustment(self, boid):
         if self.num > 0:
             group_velocity = self.change / self.num
-            self.change = (group_velocity - boid.velocity) * 0.03
+            self.change = (group_velocity - boid.velocity) * ALIGNMENT_WEIGHT
         boid.adjustment += self.change
 
 
@@ -181,6 +189,8 @@ class Separation(Rule):
     """
     Rule 3: Boids try to keep a small distance away from other objects (including other boids).
     """
+
+    RANGE = SEPARATION_RANGE
 
     def accumulate(self, boid, other, distance):
         separation = boid.location - other.location
@@ -191,7 +201,7 @@ class Separation(Rule):
     def add_adjustment(self, boid):
         if self.change.length() > 0:
             group_separation = self.change / self.num
-            self.change = (group_separation - boid.velocity) * 0.01
+            self.change = (group_separation - boid.velocity) * SEPARATION_WEIGHT
         boid.adjustment += self.change
 
 
@@ -224,7 +234,7 @@ class Boid:
 
             distance = self.location.distance_to(boid.location)
             for rule in rules:
-                if distance < rule.NEIGHBOURHOOD:
+                if distance < rule.RANGE:
                     rule.accumulate(self, boid, distance)
         self.adjustment = zero_vector3()  # reset adjustment vector
 
@@ -248,7 +258,7 @@ class Boid:
         # Hack: Add a constant velocity in whatever direction
         # they are moving so they don't ever stop.
         if self.velocity.length() > 0:
-            self.velocity += self.velocity.normalize() * random.uniform(0.0, 0.007)
+            self.velocity += self.velocity.normalize() * random.uniform(0.0, BASE_SPEED)
         self.limit_speed(1.0)
         self.location += self.velocity
 
@@ -281,14 +291,13 @@ class Flock:
 
         t_1 = time.time()
         computation_time = t_1 - t_0
-        time_to_sleep = UPDATE_INTERVAL - computation_time
-        if time_to_sleep < 0:
+        if computation_time > UPDATE_INTERVAL:
             print(
                 "WARNING: computation took %s (> %s)"
                 % (computation_time, UPDATE_INTERVAL)
             )
         else:
-            time.sleep(time_to_sleep)
+            time.sleep(UPDATE_INTERVAL - computation_time)
 
     def __repr__(self):
         rep = "Flock of %d boids bounded by %s, %s:\n" % (
@@ -357,7 +366,7 @@ class Flock:
             GL.glColor(*boid.color)
             GL.glVertex(*boid.location)
             if boid.velocity.length() > 0:
-                head = boid.location + boid.velocity.normalize() * 3
+                head = boid.location + boid.velocity.normalize()
             else:
                 head = boid.location
             GL.glVertex(head.x, head.y, head.z)
@@ -373,10 +382,10 @@ class AbstractWallBehaviour:
         self.cube_min = cube_min
         self.cube_max = cube_max
 
-    def is_near_wall(self, boid: Boid) -> bool:
+    def is_near_wall(self, boid) -> bool:
         raise NotImplementedError
 
-    def add_adjustment(self, boid: Boid):
+    def add_adjustment(self, boid):
         raise NotImplementedError
 
 
@@ -388,23 +397,21 @@ class WrapBehaviour(AbstractWallBehaviour):
     def is_near_wall(self, boid):
         return False
 
-    def add_adjustment(self, boid: Boid):
+    def add_adjustment(self, boid):
         loc = boid.location
         if loc.x < self.cube_min.x:
-            loc.x = loc.x + (self.cube_max.x - self.cube_min.x)
+            loc.x += self.cube_max.x - self.cube_min.x
         elif loc.x > self.cube_max.x:
-            loc.x = loc.x - (self.cube_max.x - self.cube_min.x)
+            loc.x -= self.cube_max.x - self.cube_min.x
         if loc.y < self.cube_min.y:
-            loc.y = loc.y + (self.cube_max.y - self.cube_min.y)
+            loc.y += self.cube_max.y - self.cube_min.y
         elif loc.y > self.cube_max.y:
-            loc.y = loc.y - (self.cube_max.y - self.cube_min.y)
+            loc.y -= self.cube_max.y - self.cube_min.y
         if loc.z < self.cube_min.z:
-            loc.z = loc.z + (self.cube_max.z - self.cube_min.z)
+            loc.z += self.cube_max.z - self.cube_min.z
         elif loc.z > self.cube_max.z:
-            loc.z = loc.z - (self.cube_max.z - self.cube_min.x)
-        boid.location = (
-            loc  # TODO this is just changing the location, but it's probably fine
-        )
+            loc.z -= self.cube_max.z - self.cube_min.x
+        boid.location = loc
 
 
 class BoundBehaviour(AbstractWallBehaviour):
@@ -413,15 +420,16 @@ class BoundBehaviour(AbstractWallBehaviour):
     """
 
     def is_near_wall(self, boid):
-        return any([abs(coord) >= EDGE * 0.95 for coord in boid.location])
+        # TODO assumes centre is 0,0,0
+        return any([abs(coord) >= EDGE * BOUND_RANGE_RATIO for coord in boid.location])
 
-    def add_adjustment(self, boid: Boid):
+    def add_adjustment(self, boid):
         change = zero_vector3()
         if boid.is_near_wall:
             # TODO assumes centre is 0,0,0
             direction = zero_vector3() - boid.location
             # TODO make it a more gradual turn
-            change = direction * 0.005
+            change = direction * BOUND_WEIGHT
         boid.adjustment += change
 
 
