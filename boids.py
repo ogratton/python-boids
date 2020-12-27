@@ -30,7 +30,7 @@ BOUND_WEIGHT = 0.001
 
 CONSTRAIN_TO_CUBE = True  # False for pac-man wrapping
 EDGE = 15  # cube size
-UPDATE_INTERVAL = 0.03
+UPDATE_INTERVAL = 0.032
 NUM_BOIDS = 150
 BASE_SPEED = 0.03
 
@@ -209,7 +209,7 @@ class Boid:
     def __init__(self, b_id, behaviour: AbstractWallBehaviour):
         self.id = b_id
         self.behaviour = behaviour
-        self.color = rand_vector3(0.5)  # R G B
+        self.color = rand_vector3(0.3, 0.7)  # R G B
         self.location = zero_vector3()  # x y z
         self.velocity = rand_vector3(-1.0, 1.0)  # vx vy vz
         self.adjustment = zero_vector3()  # to accumulate corrections
@@ -300,13 +300,11 @@ class Flock:
             time.sleep(UPDATE_INTERVAL - computation_time)
 
     def __repr__(self):
-        rep = "Flock of %d boids bounded by %s, %s:\n" % (
+        rep = "Flock of %d boids bounded by %s, %s" % (
             len(self.boids),
             self.cube_min,
             self.cube_max,
         )
-        for i, b in enumerate(self.boids):
-            rep += "%3d: %s\n" % (i, b)
         return rep
 
 
@@ -365,13 +363,11 @@ class BoundBehaviour(AbstractWallBehaviour):
         if boid.is_near_wall:
             # TODO assumes centre is 0,0,0
             direction = zero_vector3() - boid.location
-            # TODO make it a more gradual turn
             change = direction * BOUND_WEIGHT
         boid.adjustment += change
 
 
 class Renderer:
-
     def __init__(self, flock, cube_min, cube_max):
         self.flock = flock
 
@@ -415,8 +411,7 @@ class Renderer:
             GL.glVertex(point)
         GL.glEnd()
 
-    def render(self):
-        self.render_boundary()
+    def render_boids(self):
         GL.glBegin(GL.GL_LINES)
         for boid in self.flock.boids:
             GL.glColor(*boid.color)
@@ -428,6 +423,22 @@ class Renderer:
             GL.glVertex(head.x, head.y, head.z)
         GL.glEnd()
 
+    @staticmethod
+    def render_point():
+        """ unused so far """
+        GL.glEnable(GL.GL_POINT_SMOOTH)
+        GL.glPointSize(5)
+
+        GL.glBegin(GL.GL_POINTS)
+        GL.glColor3d(1, 1, 1)
+        GL.glVertex3d(0, 0, 0)
+        GL.glEnd()
+
+    def render(self):
+        self.render_boundary()
+        self.render_boids()
+        # self.render_point()
+
 
 def main():
 
@@ -438,7 +449,6 @@ def main():
     angle = 0.1  # camera rotation angle
     # side = 700
     side = 1000
-    delay = 0  # time to delay each rotation, in ms
     xyratio = 1.0  # == xside / yside
     title = "pyboids 0.1"
     pygame.init()
@@ -470,11 +480,10 @@ def main():
         ):
             break
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-        renderer.render()
         GL.glRotatef(angle, 0, 1, 0)  # orbit camera around by angle
+
+        renderer.render()
         pygame.display.flip()
-        if delay > 0:
-            pygame.time.wait(delay)
         flock.update()
 
 
