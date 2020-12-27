@@ -21,7 +21,7 @@ from OpenGL import GL, GLU
 COHESION_RANGE = 10
 ALIGNMENT_RANGE = 10
 SEPARATION_RANGE = 10
-BOUND_RANGE_RATIO = 0.8  # Point at which boids start turning round
+BOUND_RANGE_RATIO = 0.9  # Point at which boids start turning round
 
 COHESION_WEIGHT = 0.001
 ALIGNMENT_WEIGHT = 0.04
@@ -213,15 +213,20 @@ class Separation(Rule):
 
 
 class Boid:
-    def __init__(self, b_id, behaviour: AbstractWallBehaviour, starting_pos=None):
+    def __init__(
+        self,
+        b_id,
+        social_behaviour: SocialBehaviour,
+        wall_behaviour: AbstractWallBehaviour,
+        starting_pos=None,
+    ):
         self.id = b_id
-        self.behaviour = behaviour
+        self.social_behaviour = social_behaviour
+        self.wall_behaviour = wall_behaviour
         self.color = rand_vector3(0.3, 0.7)  # R G B
         self.location = starting_pos or zero_vector3()
         self.velocity = rand_vector3(-1.0, 1.0)  # vx vy vz
         self.adjustment = zero_vector3()  # to accumulate corrections
-
-        self.is_near_wall = False
 
     def __repr__(self):
         return "color %s, location %s, velocity %s" % (
@@ -230,25 +235,12 @@ class Boid:
             self.velocity,
         )
 
-    def orient(self, boids):
+    def apply_behaviours(self, boids):
         """
         Calculate new position
         """
-        rules = [Cohesion(), Alignment(), Separation()]
-        for boid in boids:  # accumulate corrections
-            if self.id == boid.id:
-                continue
-
-            distance = self.location.distance_to(boid.location)
-            for rule in rules:
-                if distance < rule.RANGE:
-                    rule.accumulate(self, boid, distance)
-        self.adjustment = zero_vector3()  # reset adjustment vector
-
-        for rule in rules:
-            rule.add_adjustment(self)
-
-        self.behaviour.add_adjustment(self)
+        self.social_behaviour.apply(self, boids)
+        self.wall_behaviour.apply(self)
 
     def update(self):
         """
@@ -261,8 +253,6 @@ class Boid:
             self.velocity += self.velocity.normalize() * random.uniform(0.0, BASE_SPEED)
         self.limit_speed(1.0)
         self.location += self.velocity
-
-        self.is_near_wall = self.behaviour.is_near_wall(self)
 
     def limit_speed(self, max_speed):
         """
@@ -277,14 +267,22 @@ class Flock:
     A flock of boids
     """
 
-    def __init__(self, num_boids, cube_min, cube_max, behaviour: AbstractWallBehaviour):
+    def __init__(
+        self,
+        num_boids,
+        cube_min,
+        cube_max,
+        social_behaviour: SocialBehaviour,
+        wall_behaviour: AbstractWallBehaviour,
+    ):
         self.cube_min = cube_min
         self.cube_max = cube_max
-        self.behaviour = behaviour
         self.boids = []
         for i in range(num_boids):
             starting_pos = rand_point_in_cube(RADIUS, cube_min)
-            self.boids.append(Boid(i, behaviour, starting_pos=starting_pos))
+            self.boids.append(
+                Boid(i, social_behaviour, wall_behaviour, starting_pos=starting_pos)
+            )
 
     def update(self):
         """
@@ -293,7 +291,7 @@ class Flock:
         t_0 = time.time()
 
         for boid in self.boids:
-            boid.orient(self.boids)  # calculate new velocity
+            boid.apply_behaviours(self.boids)  # calculate new velocity
         for boid in self.boids:
             boid.update()  # move to new position
 
@@ -316,6 +314,33 @@ class Flock:
         return rep
 
 
+class SocialBehaviour:
+    """
+    Apply rules that relate to other entities
+    """
+
+    def __init__(self, rule_classes):
+        self.rule_classes = rule_classes
+
+    def apply(self, boid, other_boids):
+        rules = [r() for r in self.rule_classes]
+
+        for other in other_boids:
+            if boid.id == other.id:
+                continue
+
+            distance = boid.location.distance_to(other.location)
+
+            for rule in rules:
+                if distance < rule.RANGE:
+                    rule.accumulate(boid, other, distance)
+
+        boid.adjustment = zero_vector3()  # reset adjustment vector
+
+        for rule in rules:
+            rule.add_adjustment(boid)
+
+
 class AbstractWallBehaviour:
     """
     What to do when a boid is near the edge of its container
@@ -325,10 +350,7 @@ class AbstractWallBehaviour:
         self.cube_min = cube_min
         self.cube_max = cube_max
 
-    def is_near_wall(self, boid) -> bool:
-        raise NotImplementedError
-
-    def add_adjustment(self, boid):
+    def apply(self, boid):
         raise NotImplementedError
 
 
@@ -337,10 +359,7 @@ class WrapBehaviour(AbstractWallBehaviour):
     Wrap round to the opposite side like pac-man
     """
 
-    def is_near_wall(self, boid):
-        return False
-
-    def add_adjustment(self, boid):
+    def apply(self, boid):
         loc = boid.location
         if loc.x < self.cube_min.x:
             loc.x += self.cube_max.x - self.cube_min.x
@@ -362,13 +381,16 @@ class BoundBehaviour(AbstractWallBehaviour):
     Start turning towards the centre
     """
 
-    def is_near_wall(self, boid):
+    @staticmethod
+    def is_near_wall(boid):
         # TODO assumes centre is 0,0,0
-        return any([abs(coord) >= RADIUS * BOUND_RANGE_RATIO for coord in boid.location])
+        return any(
+            [abs(coord) >= RADIUS * BOUND_RANGE_RATIO for coord in boid.location]
+        )
 
-    def add_adjustment(self, boid):
+    def apply(self, boid):
         change = zero_vector3()
-        if boid.is_near_wall:
+        if self.is_near_wall(boid):
             # TODO assumes centre is 0,0,0
             direction = zero_vector3() - boid.location
             change = direction * BOUND_WEIGHT
@@ -450,7 +472,7 @@ class Renderer:
 
 def main():
 
-    random.seed(1)
+    # random.seed(1)
 
     # initialize pygame and setup an opengl display
     #  angle = 0.4  # camera rotation angle
@@ -475,8 +497,15 @@ def main():
     cube_min_vertex = Vector3(-RADIUS, -RADIUS, -RADIUS)
     cube_max_vertex = Vector3(+RADIUS, +RADIUS, +RADIUS)
     behaviour_class = BoundBehaviour if CONSTRAIN_TO_CUBE else WrapBehaviour
-    behaviour = behaviour_class(cube_min_vertex, cube_max_vertex)
-    flock = Flock(NUM_BOIDS, cube_min_vertex, cube_max_vertex, behaviour)
+    social_behaviour = SocialBehaviour([Cohesion, Alignment, Separation])
+    wall_behaviour = behaviour_class(cube_min_vertex, cube_max_vertex)
+    flock = Flock(
+        NUM_BOIDS,
+        cube_min_vertex,
+        cube_max_vertex,
+        social_behaviour,
+        wall_behaviour,
+    )
 
     renderer = Renderer(flock, cube_min_vertex, cube_max_vertex)
 
