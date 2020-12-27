@@ -130,12 +130,12 @@ def zero_vector3():
     return Vector3(0, 0, 0)
 
 
-class Rule:
+class SocialRule:
     """
     Template for rules of flocking
     """
 
-    # max distance at which rule is applied
+    # Apply rule only to neighbours within this distance
     RANGE = NotImplemented
 
     def __init__(self):
@@ -148,14 +148,14 @@ class Rule:
         """
         raise NotImplementedError
 
-    def add_adjustment(self, boid):
+    def apply(self, boid):
         """
         Add the accumulated self.change to boid.adjustment
         """
         raise NotImplementedError
 
 
-class Cohesion(Rule):
+class Cohesion(SocialRule):
     """
     Rule 1: Boids try to fly towards the centre of mass of neighbouring boids.
     """
@@ -166,7 +166,7 @@ class Cohesion(Rule):
         self.change += other.location
         self.num += 1
 
-    def add_adjustment(self, boid):
+    def apply(self, boid):
         if self.num > 0:
             centroid = self.change / self.num
             desired = centroid - boid.location
@@ -174,7 +174,7 @@ class Cohesion(Rule):
         boid.adjustment += self.change
 
 
-class Alignment(Rule):
+class Alignment(SocialRule):
     """
     Rule 2: Boids try to match velocity with near boids.
     """
@@ -185,14 +185,14 @@ class Alignment(Rule):
         self.change += other.velocity
         self.num += 1
 
-    def add_adjustment(self, boid):
+    def apply(self, boid):
         if self.num > 0:
             group_velocity = self.change / self.num
             self.change = (group_velocity - boid.velocity) * ALIGNMENT_WEIGHT
         boid.adjustment += self.change
 
 
-class Separation(Rule):
+class Separation(SocialRule):
     """
     Rule 3: Boids try to keep a small distance away from other objects (including other boids).
     """
@@ -205,11 +205,115 @@ class Separation(Rule):
             self.change += separation.normalize() / distance
         self.num += 1
 
-    def add_adjustment(self, boid):
+    def apply(self, boid):
         if self.change.length() > 0:
             group_separation = self.change / self.num
             self.change = (group_separation - boid.velocity) * SEPARATION_WEIGHT
         boid.adjustment += self.change
+
+
+class SocialBehaviour:
+    """
+    Apply rules that relate to other entities
+    """
+
+    def __init__(self, rule_classes):
+        self.rule_classes = rule_classes
+
+    def apply(self, boid, other_boids):
+        rules = [r() for r in self.rule_classes]
+
+        for other in other_boids:
+            if boid.id == other.id:
+                continue
+
+            distance = boid.location.distance_to(other.location)
+
+            for rule in rules:
+                if distance < rule.RANGE:
+                    rule.accumulate(boid, other, distance)
+
+        boid.adjustment = zero_vector3()  # reset adjustment vector
+
+        for rule in rules:
+            rule.apply(boid)
+
+
+class IndividualRule:
+    """
+    Template for individual boid rules
+    """
+
+    def __init__(self, cube_min, cube_max):
+        self.cube_min = cube_min
+        self.cube_max = cube_max
+
+    def apply(self, boid):
+        raise NotImplementedError
+
+
+class Wrap(IndividualRule):
+    """
+    Wrap round to the opposite side like pac-man
+
+    Contradicts Bound
+    """
+
+    def apply(self, boid):
+        loc = boid.location
+        if loc.x < self.cube_min.x:
+            loc.x += self.cube_max.x - self.cube_min.x
+        elif loc.x > self.cube_max.x:
+            loc.x -= self.cube_max.x - self.cube_min.x
+        if loc.y < self.cube_min.y:
+            loc.y += self.cube_max.y - self.cube_min.y
+        elif loc.y > self.cube_max.y:
+            loc.y -= self.cube_max.y - self.cube_min.y
+        if loc.z < self.cube_min.z:
+            loc.z += self.cube_max.z - self.cube_min.z
+        elif loc.z > self.cube_max.z:
+            loc.z -= self.cube_max.z - self.cube_min.z
+        boid.location = loc
+
+
+class Bound(IndividualRule):
+    """
+    Start turning towards the centre when a boid approaches the edge
+
+    Contradicts Wrap
+    """
+
+    @staticmethod
+    def _is_near_wall(boid):
+        # TODO assumes centre is 0,0,0
+        return any(
+            [abs(coord) >= RADIUS * BOUND_RANGE_RATIO for coord in boid.location]
+        )
+
+    def apply(self, boid):
+        change = zero_vector3()
+        if self._is_near_wall(boid):
+            # TODO assumes centre is 0,0,0
+            direction = zero_vector3() - boid.location
+            change = direction * BOUND_WEIGHT
+        boid.adjustment += change
+
+
+class IndividualBehaviour:
+    """
+    Apply rules that do not depend on other entities
+    """
+
+    def __init__(self, rule_classes, cube_min, cube_max):
+        self.rule_classes = rule_classes
+        self.cube_min = cube_min
+        self.cube_max = cube_max
+
+    def apply(self, boid):
+        rules = [r(self.cube_min, self.cube_max) for r in self.rule_classes]
+
+        for rule in rules:
+            rule.apply(boid)
 
 
 class Boid:
@@ -217,12 +321,12 @@ class Boid:
         self,
         b_id,
         social_behaviour: SocialBehaviour,
-        wall_behaviour: AbstractWallBehaviour,
+        individual_behaviour: IndividualBehaviour,
         starting_pos=None,
     ):
         self.id = b_id
         self.social_behaviour = social_behaviour
-        self.wall_behaviour = wall_behaviour
+        self.individual_behaviour = individual_behaviour
         self.color = rand_vector3(0.3, 0.7)  # R G B
         self.location = starting_pos or zero_vector3()
         self.velocity = rand_vector3(-1.0, 1.0)  # vx vy vz
@@ -240,7 +344,7 @@ class Boid:
         Calculate new position
         """
         self.social_behaviour.apply(self, boids)
-        self.wall_behaviour.apply(self)
+        self.individual_behaviour.apply(self)
 
     def update(self):
         """
@@ -273,7 +377,7 @@ class Flock:
         cube_min,
         cube_max,
         social_behaviour: SocialBehaviour,
-        wall_behaviour: AbstractWallBehaviour,
+        individual_behaviour: IndividualBehaviour,
     ):
         self.cube_min = cube_min
         self.cube_max = cube_max
@@ -281,7 +385,7 @@ class Flock:
         for i in range(num_boids):
             starting_pos = rand_point_in_cube(RADIUS, cube_min)
             self.boids.append(
-                Boid(i, social_behaviour, wall_behaviour, starting_pos=starting_pos)
+                Boid(i, social_behaviour, individual_behaviour, starting_pos=starting_pos)
             )
 
     def update(self):
@@ -312,89 +416,6 @@ class Flock:
             self.cube_max,
         )
         return rep
-
-
-class SocialBehaviour:
-    """
-    Apply rules that relate to other entities
-    """
-
-    def __init__(self, rule_classes):
-        self.rule_classes = rule_classes
-
-    def apply(self, boid, other_boids):
-        rules = [r() for r in self.rule_classes]
-
-        for other in other_boids:
-            if boid.id == other.id:
-                continue
-
-            distance = boid.location.distance_to(other.location)
-
-            for rule in rules:
-                if distance < rule.RANGE:
-                    rule.accumulate(boid, other, distance)
-
-        boid.adjustment = zero_vector3()  # reset adjustment vector
-
-        for rule in rules:
-            rule.add_adjustment(boid)
-
-
-class AbstractWallBehaviour:
-    """
-    What to do when a boid is near the edge of its container
-    """
-
-    def __init__(self, cube_min, cube_max):
-        self.cube_min = cube_min
-        self.cube_max = cube_max
-
-    def apply(self, boid):
-        raise NotImplementedError
-
-
-class WrapBehaviour(AbstractWallBehaviour):
-    """
-    Wrap round to the opposite side like pac-man
-    """
-
-    def apply(self, boid):
-        loc = boid.location
-        if loc.x < self.cube_min.x:
-            loc.x += self.cube_max.x - self.cube_min.x
-        elif loc.x > self.cube_max.x:
-            loc.x -= self.cube_max.x - self.cube_min.x
-        if loc.y < self.cube_min.y:
-            loc.y += self.cube_max.y - self.cube_min.y
-        elif loc.y > self.cube_max.y:
-            loc.y -= self.cube_max.y - self.cube_min.y
-        if loc.z < self.cube_min.z:
-            loc.z += self.cube_max.z - self.cube_min.z
-        elif loc.z > self.cube_max.z:
-            loc.z -= self.cube_max.z - self.cube_min.z
-        boid.location = loc
-
-
-class BoundBehaviour(AbstractWallBehaviour):
-    """
-    Start turning towards the centre
-    """
-
-    @staticmethod
-    def is_near_wall(boid):
-        # TODO assumes centre is 0,0,0
-        return any(
-            [abs(coord) >= RADIUS * BOUND_RANGE_RATIO for coord in boid.location]
-        )
-
-    def apply(self, boid):
-        change = zero_vector3()
-        if self.is_near_wall(boid):
-            # TODO assumes centre is 0,0,0
-            direction = zero_vector3() - boid.location
-            change = direction * BOUND_WEIGHT
-        boid.adjustment += change
 
 
 class Renderer:
@@ -496,15 +517,15 @@ def main():
     GL.glPointSize(3.0)
     cube_min_vertex = Vector3(-RADIUS, -RADIUS, -RADIUS)
     cube_max_vertex = Vector3(+RADIUS, +RADIUS, +RADIUS)
-    behaviour_class = BoundBehaviour if CONSTRAIN_TO_CUBE else WrapBehaviour
     social_behaviour = SocialBehaviour([Cohesion, Alignment, Separation])
-    wall_behaviour = behaviour_class(cube_min_vertex, cube_max_vertex)
+    cube_rule = Bound if CONSTRAIN_TO_CUBE else Wrap
+    individual_behaviour = IndividualBehaviour([cube_rule], cube_min_vertex, cube_max_vertex)
     flock = Flock(
         NUM_BOIDS,
         cube_min_vertex,
         cube_max_vertex,
         social_behaviour,
-        wall_behaviour,
+        individual_behaviour,
     )
 
     renderer = Renderer(flock, cube_min_vertex, cube_max_vertex)
