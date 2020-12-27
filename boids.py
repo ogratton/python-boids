@@ -1,5 +1,4 @@
 # TODO fish shoal that avoids predators
-# TODO split rendering code
 # Copyright (c) 2012 Tom Marble
 # Licensed under the MIT license http://opensource.org/licenses/MIT
 # https://github.com/tmarble/pyboids/blob/master/boids.py
@@ -18,28 +17,31 @@ import pygame
 import pygame.locals as pyg
 from OpenGL import GL, GLU
 
-COHESION_RANGE = 10
-ALIGNMENT_RANGE = 10
-SEPARATION_RANGE = 10
-BOUND_RANGE_RATIO = 0.9  # Point at which boids start turning round
+COHESION_RANGE = 8
+ALIGNMENT_RANGE = 6
+SEPARATION_RANGE = 4
+
+BOUND_RANGE_RATIO = 0.8  # Point at which boids start turning round
+FREE_WILL_CHANCE = 0.0002  # chance to become a trend-setter
 
 COHESION_WEIGHT = 0.001
 ALIGNMENT_WEIGHT = 0.04
 SEPARATION_WEIGHT = 0.05
-BOUND_WEIGHT = 0.001
 
-CONSTRAIN_TO_CUBE = True  # False for pac-man wrapping
+BOUND_WEIGHT = 0.001
+FREE_WILL_WEIGHT = 1
+ATTRACTION_WEIGHT = 0.0005
+
 RADIUS = 15  # bad name, but half of cube edge length
 UPDATE_INTERVAL = 0.032
 NUM_BOIDS = 150
 BASE_SPEED = 0.03
-RAND_POINT_STD_DEV = 7.5
 
 
 class CustomVector3:
     """
     numpy arrays aren't optimised for small lengths.
-    This tries to replicate the bare pygame Vector3 behaviour we need.
+    This tries to replicate the minimal pygame Vector3 behaviour we need.
     It's way way slower, but it's still better than numpy.
     """
 
@@ -254,9 +256,7 @@ class IndividualRule:
 
 class Wrap(IndividualRule):
     """
-    Wrap round to the opposite side like pac-man
-
-    Contradicts Bound
+    If a boid manages to escape, teleport it to the opposite side like pac-man
     """
 
     def apply(self, boid):
@@ -279,8 +279,6 @@ class Wrap(IndividualRule):
 class Bound(IndividualRule):
     """
     Start turning towards the centre when a boid approaches the edge
-
-    Contradicts Wrap
     """
 
     @staticmethod
@@ -296,6 +294,33 @@ class Bound(IndividualRule):
             # TODO assumes centre is 0,0,0
             direction = zero_vector3() - boid.location
             change = direction * BOUND_WEIGHT
+        boid.adjustment += change
+
+
+class FreeWill(IndividualRule):
+    """
+    Small chance to break the mold
+    """
+
+    def apply(self, boid):
+        if random.random() < FREE_WILL_CHANCE:
+            rand = rand_vector3(lower=-1)
+            print("%s is going rogue" % boid.id)
+            boid.adjustment += rand * FREE_WILL_WEIGHT
+
+
+class Attraction(IndividualRule):
+    """
+    A constant deep-seated longing for home
+
+    (Mild attraction to the centre)
+    TODO make it some customisable point
+    """
+
+    def apply(self, boid):
+        # TODO assumes centre is 0,0,0
+        direction = zero_vector3() - boid.location
+        change = direction * ATTRACTION_WEIGHT  # TODO const
         boid.adjustment += change
 
 
@@ -383,9 +408,15 @@ class Flock:
         self.cube_max = cube_max
         self.boids = []
         for i in range(num_boids):
-            starting_pos = rand_point_in_cube(RADIUS, cube_min)
+            # starting_pos = rand_point_in_cube(RADIUS, cube_min)
+            starting_pos = None
             self.boids.append(
-                Boid(i, social_behaviour, individual_behaviour, starting_pos=starting_pos)
+                Boid(
+                    i,
+                    social_behaviour,
+                    individual_behaviour,
+                    starting_pos=starting_pos,
+                )
             )
 
     def update(self):
@@ -456,7 +487,6 @@ class Renderer:
                 GL.glVertex(point)
             GL.glEnd()
 
-        # The connecting lines in the Z direction
         GL.glBegin(GL.GL_LINES)
         for point in self.lines:
             GL.glVertex(point)
@@ -493,7 +523,7 @@ class Renderer:
 
 def main():
 
-    # random.seed(1)
+    random.seed(1)
 
     # initialize pygame and setup an opengl display
     #  angle = 0.4  # camera rotation angle
@@ -517,9 +547,23 @@ def main():
     GL.glPointSize(3.0)
     cube_min_vertex = Vector3(-RADIUS, -RADIUS, -RADIUS)
     cube_max_vertex = Vector3(+RADIUS, +RADIUS, +RADIUS)
-    social_behaviour = SocialBehaviour([Cohesion, Alignment, Separation])
-    cube_rule = Bound if CONSTRAIN_TO_CUBE else Wrap
-    individual_behaviour = IndividualBehaviour([cube_rule], cube_min_vertex, cube_max_vertex)
+    social_behaviour = SocialBehaviour(
+        [
+            Cohesion,
+            Alignment,
+            Separation,
+        ]
+    )
+    individual_behaviour = IndividualBehaviour(
+        [
+            Bound,
+            Wrap,
+            FreeWill,
+            Attraction,
+        ],
+        cube_min_vertex,
+        cube_max_vertex,
+    )
     flock = Flock(
         NUM_BOIDS,
         cube_min_vertex,
