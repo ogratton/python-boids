@@ -241,14 +241,7 @@ class Boid:
         for rule in rules:
             rule.add_adjustment(self)
 
-        self.behaviour.add_adjustment(self)  # TODO is this the right place?
-
-    def limit_speed(self, max_speed):
-        """
-        Ensure the speed does not exceed max_speed
-        """
-        if self.velocity.length() > max_speed:
-            self.velocity = self.velocity.normalize() * max_speed
+        self.behaviour.add_adjustment(self)
 
     def update(self):
         """
@@ -263,6 +256,13 @@ class Boid:
         self.location += self.velocity
 
         self.is_near_wall = self.behaviour.is_near_wall(self)
+
+    def limit_speed(self, max_speed):
+        """
+        Ensure the speed does not exceed max_speed
+        """
+        if self.velocity.length() > max_speed:
+            self.velocity = self.velocity.normalize() * max_speed
 
 
 class Flock:
@@ -309,69 +309,6 @@ class Flock:
             rep += "%3d: %s\n" % (i, b)
         return rep
 
-    def top_square(self):
-        """
-        loop of points defining top square
-        """
-        return self.square_abstract(self.cube_min, self.cube_max, self.cube_max.z)
-
-    def bottom_square(self):
-        """
-        loop of points defining bottom square
-        """
-        return self.square_abstract(self.cube_min, self.cube_max, self.cube_min.z)
-
-    @staticmethod
-    def square_abstract(a, b, z):
-        return [
-            [a.x, a.y, z],
-            [a.x, b.y, z],
-            [b.x, b.y, z],
-            [b.x, a.y, z],
-        ]
-
-    @staticmethod
-    def vertical_lines(top, bottom):
-        """
-        point pairs defining vertical lines of the cube
-        """
-        for t, b in zip(top, bottom):
-            yield t
-            yield b
-
-    @staticmethod
-    def render_boundary(*box_coords):
-        """
-        Draw the bounding cube
-        """
-        top, bottom, lines = box_coords
-
-        GL.glColor(0.5, 0.5, 0.5)
-        for loop in (top, bottom):
-            GL.glBegin(GL.GL_LINE_LOOP)
-            for point in loop:
-                GL.glVertex(point)
-            GL.glEnd()
-
-        # The connecting lines in the Z direction
-        GL.glBegin(GL.GL_LINES)
-        for point in lines:
-            GL.glVertex(point)
-        GL.glEnd()
-
-    def render(self, *box_coords):
-        self.render_boundary(*box_coords)
-        GL.glBegin(GL.GL_LINES)
-        for boid in self.boids:
-            GL.glColor(*boid.color)
-            GL.glVertex(*boid.location)
-            if boid.velocity.length() > 0:
-                head = boid.location + boid.velocity.normalize()
-            else:
-                head = boid.location
-            GL.glVertex(head.x, head.y, head.z)
-        GL.glEnd()
-
 
 class AbstractWallBehaviour:
     """
@@ -410,7 +347,7 @@ class WrapBehaviour(AbstractWallBehaviour):
         if loc.z < self.cube_min.z:
             loc.z += self.cube_max.z - self.cube_min.z
         elif loc.z > self.cube_max.z:
-            loc.z -= self.cube_max.z - self.cube_min.x
+            loc.z -= self.cube_max.z - self.cube_min.z
         boid.location = loc
 
 
@@ -431,6 +368,65 @@ class BoundBehaviour(AbstractWallBehaviour):
             # TODO make it a more gradual turn
             change = direction * BOUND_WEIGHT
         boid.adjustment += change
+
+
+class Renderer:
+
+    def __init__(self, flock, cube_min, cube_max):
+        self.flock = flock
+
+        self.top_square = self.make_square_abstract(cube_min, cube_max, cube_max.z)
+        self.bottom_square = self.make_square_abstract(cube_min, cube_max, cube_min.z)
+        self.lines = self.make_vertical_lines(self.top_square, self.bottom_square)
+
+    @staticmethod
+    def make_square_abstract(a, b, z):
+        return [
+            [a.x, a.y, z],
+            [a.x, b.y, z],
+            [b.x, b.y, z],
+            [b.x, a.y, z],
+        ]
+
+    @staticmethod
+    def make_vertical_lines(top, bottom):
+        """
+        point pairs defining vertical lines of the cube
+        """
+        agg = []
+        for tb in zip(top, bottom):
+            agg.extend(tb)
+        return agg
+
+    def render_boundary(self):
+        """
+        Draw the bounding cube
+        """
+        GL.glColor(0.5, 0.5, 0.5)
+        for loop in (self.top_square, self.bottom_square):
+            GL.glBegin(GL.GL_LINE_LOOP)
+            for point in loop:
+                GL.glVertex(point)
+            GL.glEnd()
+
+        # The connecting lines in the Z direction
+        GL.glBegin(GL.GL_LINES)
+        for point in self.lines:
+            GL.glVertex(point)
+        GL.glEnd()
+
+    def render(self):
+        self.render_boundary()
+        GL.glBegin(GL.GL_LINES)
+        for boid in self.flock.boids:
+            GL.glColor(*boid.color)
+            GL.glVertex(*boid.location)
+            if boid.velocity.length() > 0:
+                head = boid.location + boid.velocity.normalize()
+            else:
+                head = boid.location
+            GL.glVertex(head.x, head.y, head.z)
+        GL.glEnd()
 
 
 def main():
@@ -464,10 +460,7 @@ def main():
     behaviour = behaviour_class(cube_min_vertex, cube_max_vertex)
     flock = Flock(NUM_BOIDS, cube_min_vertex, cube_max_vertex, behaviour)
 
-    square_top = flock.top_square()
-    square_bottom = flock.bottom_square()
-    square_lines = list(flock.vertical_lines(square_top, square_bottom))
-    square_coords = (square_top, square_bottom, square_lines)
+    renderer = Renderer(flock, cube_min_vertex, cube_max_vertex)
 
     while True:
         event = pygame.event.poll()
@@ -477,7 +470,7 @@ def main():
         ):
             break
         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-        flock.render(*square_coords)
+        renderer.render()
         GL.glRotatef(angle, 0, 1, 0)  # orbit camera around by angle
         pygame.display.flip()
         if delay > 0:
