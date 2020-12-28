@@ -17,7 +17,7 @@ import pygame
 import pygame.locals as pyg
 from OpenGL import GL, GLU
 
-COHESION_RANGE = 8
+COHESION_RANGE = 12
 ALIGNMENT_RANGE = 6
 SEPARATION_RANGE = 4
 
@@ -32,10 +32,17 @@ BOUND_WEIGHT = 0.001
 FREE_WILL_WEIGHT = 1
 ATTRACTION_WEIGHT = 0.0005
 
-RADIUS = 15  # bad name, but half of cube edge length
+RADIUS = 25  # bad name, but half of cube edge length
 UPDATE_INTERVAL = 0.032
 NUM_BOIDS = 150
-BASE_SPEED = 0.03
+BOID_BASE_SPEED = 0.03
+BOID_MAX_SPEED = 0.6
+BOID_PREDATOR_AVOIDANCE = 0.009
+
+NUM_PREDATORS = 3
+
+BOID_RENDER_LENGTH = 1
+PREDATOR_RENDER_SIZE = 5
 
 
 class CustomVector3:
@@ -73,24 +80,12 @@ class CustomVector3:
         return self._naive_op(other, lambda v: v[0] - v[1])
 
     def __mul__(self, other):
-        if isinstance(
-            other,
-            (
-                int,
-                float,
-            ),
-        ):
+        if isinstance(other, (int, float)):
             return self._naive_op([other] * 3, lambda v: v[0] * v[1])
         raise NotImplementedError("too much maths")
 
     def __truediv__(self, other):
-        if isinstance(
-            other,
-            (
-                int,
-                float,
-            ),
-        ):
+        if isinstance(other, (int, float)):
             return self._naive_op([other] * 3, lambda v: v[0] / v[1])
         raise TypeError("Can't divide two vectors")
 
@@ -219,13 +214,14 @@ class SocialBehaviour:
     Apply rules that relate to other entities
     """
 
-    def __init__(self, rule_classes):
-        self.rule_classes = rule_classes
+    def __init__(self, rule_classes=None, avoid_predators=False):
+        self.rule_classes = rule_classes or []
+        self.avoid_predators = avoid_predators
 
-    def apply(self, boid, other_boids):
+    def apply(self, boid, all_boids, predators):
         rules = [r() for r in self.rule_classes]
 
-        for other in other_boids:
+        for other in all_boids:
             if boid.id == other.id:
                 continue
 
@@ -236,6 +232,14 @@ class SocialBehaviour:
                     rule.accumulate(boid, other, distance)
 
         boid.adjustment = zero_vector3()  # reset adjustment vector
+
+        if self.avoid_predators:
+            for pred in predators:
+                distance = boid.location.distance_to(pred.location)
+                if distance < 10:
+                    separation = boid.location - pred.location
+                    change = separation * BOID_PREDATOR_AVOIDANCE
+                    boid.adjustment += change
 
         for rule in rules:
             rule.apply(boid)
@@ -329,10 +333,10 @@ class IndividualBehaviour:
     Apply rules that do not depend on other entities
     """
 
-    def __init__(self, rule_classes, cube_min, cube_max):
-        self.rule_classes = rule_classes
+    def __init__(self, cube_min, cube_max, rule_classes=None):
         self.cube_min = cube_min
         self.cube_max = cube_max
+        self.rule_classes = rule_classes or []
 
     def apply(self, boid):
         rules = [r(self.cube_min, self.cube_max) for r in self.rule_classes]
@@ -352,23 +356,29 @@ class Boid:
         self.id = b_id
         self.social_behaviour = social_behaviour
         self.individual_behaviour = individual_behaviour
-        self.color = rand_vector3(0.3, 0.7)  # R G B
+        self.color = self.decide_colour()
         self.location = starting_pos or zero_vector3()
-        self.velocity = rand_vector3(-1.0, 1.0)  # vx vy vz
+        self.velocity = rand_vector3(-1.0, 1.0)
         self.adjustment = zero_vector3()  # to accumulate corrections
 
     def __repr__(self):
-        return "color %s, location %s, velocity %s" % (
+        return "%s %s: color %s, location %s, velocity %s" % (
+            self.__class__.__name__,
+            self.id,
             self.color,
             self.location,
             self.velocity,
         )
 
-    def apply_behaviours(self, boids):
+    @staticmethod
+    def decide_colour():
+        return rand_vector3(0.3, 0.7)
+
+    def apply_behaviours(self, boids, predators):
         """
         Calculate new position
         """
-        self.social_behaviour.apply(self, boids)
+        self.social_behaviour.apply(self, boids, predators)
         self.individual_behaviour.apply(self)
 
     def update(self):
@@ -379,8 +389,10 @@ class Boid:
         # Hack: Add a constant velocity in whatever direction
         # they are moving so they don't ever stop.
         if self.velocity.length() > 0:
-            self.velocity += self.velocity.normalize() * random.uniform(0.0, BASE_SPEED)
-        self.limit_speed(1.0)
+            self.velocity += self.velocity.normalize() * random.uniform(
+                0.0, BOID_BASE_SPEED
+            )
+        self.limit_speed(BOID_MAX_SPEED)
         self.location += self.velocity
 
     def limit_speed(self, max_speed):
@@ -391,6 +403,13 @@ class Boid:
             self.velocity = self.velocity.normalize() * max_speed
 
 
+class Predator(Boid):
+
+    @staticmethod
+    def decide_colour():
+        return Vector3(0.4, 0, 0)
+
+
 class Flock:
     """
     A flock of boids
@@ -398,23 +417,38 @@ class Flock:
 
     def __init__(
         self,
-        num_boids,
         cube_min,
         cube_max,
-        social_behaviour: SocialBehaviour,
-        individual_behaviour: IndividualBehaviour,
+        num_boids,
+        boid_social_behaviour: SocialBehaviour,
+        boid_individual_behaviour: IndividualBehaviour,
+        num_predators,
+        predator_social_behaviour: SocialBehaviour,
+        predator_individual_behaviour: IndividualBehaviour,
     ):
         self.cube_min = cube_min
         self.cube_max = cube_max
         self.boids = []
         for i in range(num_boids):
-            # starting_pos = rand_point_in_cube(RADIUS, cube_min)
-            starting_pos = None
+            starting_pos = rand_point_in_cube(RADIUS, cube_min)
+            # starting_pos = None
             self.boids.append(
                 Boid(
                     i,
-                    social_behaviour,
-                    individual_behaviour,
+                    boid_social_behaviour,
+                    boid_individual_behaviour,
+                    starting_pos=starting_pos,
+                )
+            )
+
+        self.predators = []
+        for i in range(num_predators):
+            starting_pos = rand_point_in_cube(RADIUS, cube_min)
+            self.predators.append(
+                Predator(
+                    i,
+                    predator_social_behaviour,
+                    predator_individual_behaviour,
                     starting_pos=starting_pos,
                 )
             )
@@ -425,10 +459,11 @@ class Flock:
         """
         t_0 = time.time()
 
-        for boid in self.boids:
-            boid.apply_behaviours(self.boids)  # calculate new velocity
-        for boid in self.boids:
-            boid.update()  # move to new position
+        for entities in (self.boids, self.predators):
+            for entity in entities:
+                entity.apply_behaviours(self.boids, self.predators)  # calculate new velocity
+            for entity in entities:
+                entity.update()  # move to new position
 
         t_1 = time.time()
         computation_time = t_1 - t_0
@@ -498,27 +533,31 @@ class Renderer:
             GL.glColor(*boid.color)
             GL.glVertex(*boid.location)
             if boid.velocity.length() > 0:
-                head = boid.location + boid.velocity.normalize()
+                head = boid.location + boid.velocity.normalize() * BOID_RENDER_LENGTH
             else:
                 head = boid.location
             GL.glVertex(head.x, head.y, head.z)
         GL.glEnd()
 
+    def render_predators(self):
+        for pred in self.flock.predators:
+            self.render_point(pred.color, pred.location)
+
     @staticmethod
-    def render_point():
+    def render_point(colour, location):
         """ unused so far """
         GL.glEnable(GL.GL_POINT_SMOOTH)
-        GL.glPointSize(5)
+        GL.glPointSize(PREDATOR_RENDER_SIZE)
 
         GL.glBegin(GL.GL_POINTS)
-        GL.glColor3d(1, 1, 1)
-        GL.glVertex3d(0, 0, 0)
+        GL.glColor3d(*colour)
+        GL.glVertex3d(*location)
         GL.glEnd()
 
     def render(self):
         self.render_boundary()
         self.render_boids()
-        # self.render_point()
+        self.render_predators()
 
 
 def main():
@@ -547,30 +586,40 @@ def main():
     GL.glPointSize(3.0)
     cube_min_vertex = Vector3(-RADIUS, -RADIUS, -RADIUS)
     cube_max_vertex = Vector3(+RADIUS, +RADIUS, +RADIUS)
-    social_behaviour = SocialBehaviour(
+    boid_social_behaviour = SocialBehaviour(
         [
             Cohesion,
             Alignment,
             Separation,
-        ]
+        ],
+        avoid_predators=True,
     )
-    individual_behaviour = IndividualBehaviour(
+    boid_individual_behaviour = IndividualBehaviour(
+        cube_min_vertex,
+        cube_max_vertex,
         [
             Bound,
-            Wrap,
-            FreeWill,
+            # Wrap,
+            # FreeWill,
             Attraction,
         ],
-        cube_min_vertex,
-        cube_max_vertex,
+    )
+    predator_social_behaviour = SocialBehaviour()
+    predator_individual_behaviour = IndividualBehaviour(
+        # TODO add meaningful movement
+        cube_min_vertex, cube_max_vertex, [Bound, Wrap]
     )
     flock = Flock(
-        NUM_BOIDS,
         cube_min_vertex,
         cube_max_vertex,
-        social_behaviour,
-        individual_behaviour,
+        NUM_BOIDS,
+        boid_social_behaviour,
+        boid_individual_behaviour,
+        NUM_PREDATORS,
+        predator_social_behaviour,
+        predator_individual_behaviour,
     )
+    # TODO make template boid/predator instead of passing all behaviours
 
     renderer = Renderer(flock, cube_min_vertex, cube_max_vertex)
 
