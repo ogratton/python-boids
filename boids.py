@@ -30,7 +30,7 @@ SEPARATION_WEIGHT = 0.05
 
 BOUND_WEIGHT = 0.001
 FREE_WILL_WEIGHT = 1
-ATTRACTION_WEIGHT = 0.0005
+ATTRACTION_WEIGHT = 0.0008
 
 RADIUS = 25  # bad name, but half of cube edge length
 UPDATE_INTERVAL = 0.032
@@ -39,10 +39,12 @@ BOID_BASE_SPEED = 0.03
 BOID_MAX_SPEED = 0.6
 BOID_PREDATOR_AVOIDANCE = 0.009
 
-NUM_PREDATORS = 3
+NUM_PREDATORS = 4
+PREDATOR_BASE_SPEED = 0.02
+PREDATOR_MAX_SPEED = 0.5
 
 BOID_RENDER_LENGTH = 1
-PREDATOR_RENDER_SIZE = 5
+PREDATOR_RENDER_SIZE = 10
 
 
 class CustomVector3:
@@ -313,6 +315,25 @@ class FreeWill(IndividualRule):
             boid.adjustment += rand * FREE_WILL_WEIGHT
 
 
+class PathFollow(IndividualRule):
+    """
+    Follow a path
+    """
+
+    def apply(self, boid):  # TODO rename to entity
+        # TODO speed should be the same relative to all radii
+        t = (boid.tick / 100) % 10  # randomise for random speed
+
+        x = math.sin(math.pi * t * 0.4)
+        y = math.cos(math.pi * t * 0.2)
+        z = math.cos(math.pi * t)
+
+        new_pos = (Vector3(x, y, z) * RADIUS)
+        # TODO could do adjustment = new_pos - old_pos
+        # boid.location = new_pos
+        boid.adjustment += new_pos - boid.location
+
+
 class Attraction(IndividualRule):
     """
     A constant deep-seated longing for home
@@ -324,7 +345,7 @@ class Attraction(IndividualRule):
     def apply(self, boid):
         # TODO assumes centre is 0,0,0
         direction = zero_vector3() - boid.location
-        change = direction * ATTRACTION_WEIGHT  # TODO const
+        change = direction * ATTRACTION_WEIGHT
         boid.adjustment += change
 
 
@@ -346,6 +367,9 @@ class IndividualBehaviour:
 
 
 class Boid:
+    BASE_SPEED = BOID_BASE_SPEED
+    MAX_SPEED = BOID_MAX_SPEED
+
     def __init__(
         self,
         b_id,
@@ -360,6 +384,8 @@ class Boid:
         self.location = starting_pos or zero_vector3()
         self.velocity = rand_vector3(-1.0, 1.0)
         self.adjustment = zero_vector3()  # to accumulate corrections
+
+        self.tick = random.randint(0, 1000)  # TODO
 
     def __repr__(self):
         return "%s %s: color %s, location %s, velocity %s" % (
@@ -390,20 +416,24 @@ class Boid:
         # they are moving so they don't ever stop.
         if self.velocity.length() > 0:
             self.velocity += self.velocity.normalize() * random.uniform(
-                0.0, BOID_BASE_SPEED
+                0.0, self.BASE_SPEED
             )
-        self.limit_speed(BOID_MAX_SPEED)
+        self.limit_speed()
         self.location += self.velocity
 
-    def limit_speed(self, max_speed):
+        self.tick += 1
+
+    def limit_speed(self):
         """
         Ensure the speed does not exceed max_speed
         """
-        if self.velocity.length() > max_speed:
-            self.velocity = self.velocity.normalize() * max_speed
+        if self.velocity.length() > self.MAX_SPEED:
+            self.velocity = self.velocity.normalize() * self.MAX_SPEED
 
 
 class Predator(Boid):
+    BASE_SPEED = PREDATOR_BASE_SPEED
+    MAX_SPEED = PREDATOR_MAX_SPEED
 
     @staticmethod
     def decide_colour():
@@ -443,7 +473,8 @@ class Flock:
 
         self.predators = []
         for i in range(num_predators):
-            starting_pos = rand_point_in_cube(RADIUS, cube_min)
+            # starting_pos = rand_point_in_cube(RADIUS, cube_min)
+            starting_pos = None
             self.predators.append(
                 Predator(
                     i,
@@ -461,7 +492,9 @@ class Flock:
 
         for entities in (self.boids, self.predators):
             for entity in entities:
-                entity.apply_behaviours(self.boids, self.predators)  # calculate new velocity
+                entity.apply_behaviours(
+                    self.boids, self.predators
+                )  # calculate new velocity
             for entity in entities:
                 entity.update()  # move to new position
 
@@ -562,7 +595,7 @@ class Renderer:
 
 def main():
 
-    random.seed(1)
+    # random.seed(1)
 
     # initialize pygame and setup an opengl display
     #  angle = 0.4  # camera rotation angle
@@ -606,8 +639,13 @@ def main():
     )
     predator_social_behaviour = SocialBehaviour()
     predator_individual_behaviour = IndividualBehaviour(
-        # TODO add meaningful movement
-        cube_min_vertex, cube_max_vertex, [Bound, Wrap]
+        cube_min_vertex,
+        cube_max_vertex,
+        [
+            Bound,
+            # Wrap,
+            PathFollow,
+        ],
     )
     flock = Flock(
         cube_min_vertex,
