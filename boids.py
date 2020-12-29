@@ -329,7 +329,7 @@ class PathFollow(IndividualRule):
         y = math.cos(math.pi * t * 0.2)
         z = math.cos(math.pi * t)
 
-        new_pos = (Vector3(x, y, z) * RADIUS)
+        new_pos = Vector3(x, y, z) * RADIUS
         boid.location = new_pos
         # boid.adjustment += (new_pos - boid.location) * PREDATOR_PATH_WEIGHT
 
@@ -518,12 +518,14 @@ class Flock:
 
 
 class Renderer:
-    def __init__(self, flock, cube_min, cube_max):
+    def __init__(self, flock, cube_min, cube_max, lights=None):
         self.flock = flock
 
         self.top_square = self.make_square_abstract(cube_min, cube_max, cube_max.z)
         self.bottom_square = self.make_square_abstract(cube_min, cube_max, cube_min.z)
         self.lines = self.make_vertical_lines(self.top_square, self.bottom_square)
+
+        self.lights = lights
 
     @staticmethod
     def make_square_abstract(a, b, z):
@@ -588,9 +590,51 @@ class Renderer:
         GL.glEnd()
 
     def render(self):
-        self.render_boundary()
-        self.render_boids()
-        self.render_predators()
+        if not self.lights:
+            self.render_boundary()
+            self.render_boids()
+            self.render_predators()
+
+        else:
+            # self.render_boids()
+
+            for light in self.lights:
+                colour = self.calculate_light_colour(light)
+                self.render_point(colour, light)
+
+    def calculate_light_colour(self, light_location):
+        DIST_REQUIRED = RADIUS/7  # TODO
+
+        min_distance = RADIUS*100
+        colour_of_nearest = (0, 0, 0)
+        for boid in self.flock.boids:
+            distance = light_location.distance_to(boid.location)
+            if distance < min_distance and distance < DIST_REQUIRED:
+                min_distance = distance
+                colour_of_nearest = boid.color
+        return colour_of_nearest
+
+
+class TreeLights:
+    """
+    To play on Matt Parker's Christmas Tree
+    """
+    @classmethod
+    def load(cls):
+        return cls._transform_coords(cls._load_coords())
+
+    @staticmethod
+    def _load_coords():
+        with open("coords.txt", "r") as f:
+            return list(map(eval, f.readlines()))
+
+    @staticmethod
+    def _transform_coords(coords):
+        unit_scale = RADIUS / 260
+        return [
+            Vector3(x * unit_scale, z * 0.6 * unit_scale, y * unit_scale)
+            for x, y, z in coords
+        ]
 
 
 def main():
@@ -659,7 +703,7 @@ def main():
     )
     # TODO make template boid/predator instead of passing all behaviours
 
-    renderer = Renderer(flock, cube_min_vertex, cube_max_vertex)
+    renderer = Renderer(flock, cube_min_vertex, cube_max_vertex, TreeLights.load())
 
     while True:
         event = pygame.event.poll()
