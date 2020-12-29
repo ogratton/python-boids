@@ -1,3 +1,5 @@
+adafruit-circuitpython-neopixel
 black
+board
 pygame
 pyopengl

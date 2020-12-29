@@ -16,6 +16,8 @@ import pygame
 import pygame.locals as pyg
 from OpenGL import GL, GLU
 
+CHRISTMAS_TREE_MODE = False
+
 COHESION_RANGE = 12
 ALIGNMENT_RANGE = 6
 SEPARATION_RANGE = 4
@@ -31,7 +33,7 @@ BOUND_WEIGHT = 0.001
 FREE_WILL_WEIGHT = 1
 ATTRACTION_WEIGHT = 0.0008
 
-RADIUS = 25  # bad name, but half of cube edge length
+RADIUS = 15  # bad name, but half of cube edge length
 UPDATE_INTERVAL = 0.033
 NUM_BOIDS = 150
 BOID_BASE_SPEED = 0.03
@@ -44,7 +46,7 @@ PREDATOR_BASE_SPEED = 0.02
 PREDATOR_MAX_SPEED = 0.5
 PREDATOR_PATH_WEIGHT = 1
 
-BOID_RENDER_LENGTH = 1
+BOID_RENDER_LENGTH = 0.5
 PREDATOR_RENDER_SIZE = 10
 
 
@@ -526,7 +528,7 @@ class Renderer:
 
         self.lights = lights
         self.off_colour = (.1, .1, .1)
-        self.light_colour_history = [self.off_colour] * len(lights)
+        self.light_colour_history = [self.off_colour] * len(lights or [])
 
     @staticmethod
     def make_square_abstract(a, b, z):
@@ -644,7 +646,7 @@ class TreeLights:
     def _transform_coords(coords):
         unit_scale = RADIUS / 260
         return [
-            Vector3(x * 0.7 * unit_scale, z * 0.6 * unit_scale, y * 0.7 * unit_scale)
+            Vector3(x * 0.7 * unit_scale, z * 0.7 * unit_scale, y * 0.7 * unit_scale)
             for x, y, z in coords
         ]
 
@@ -715,7 +717,9 @@ def main():
     )
     # TODO make template boid/predator instead of passing all behaviours
 
-    renderer = Renderer(flock, cube_min_vertex, cube_max_vertex, TreeLights.load())
+    lights = TreeLights.load() if CHRISTMAS_TREE_MODE else None
+
+    renderer = Renderer(flock, cube_min_vertex, cube_max_vertex, lights)
 
     while True:
         event = pygame.event.poll()
