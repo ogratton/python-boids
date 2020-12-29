@@ -33,15 +33,17 @@ FREE_WILL_WEIGHT = 1
 ATTRACTION_WEIGHT = 0.0008
 
 RADIUS = 25  # bad name, but half of cube edge length
-UPDATE_INTERVAL = 0.032
+UPDATE_INTERVAL = 0.033
 NUM_BOIDS = 150
 BOID_BASE_SPEED = 0.03
 BOID_MAX_SPEED = 0.6
+BOID_PREDATOR_ALARM_RADIUS = RADIUS * 0.4
 BOID_PREDATOR_AVOIDANCE = 0.009
 
 NUM_PREDATORS = 4
 PREDATOR_BASE_SPEED = 0.02
 PREDATOR_MAX_SPEED = 0.5
+PREDATOR_PATH_WEIGHT = 1
 
 BOID_RENDER_LENGTH = 1
 PREDATOR_RENDER_SIZE = 10
@@ -238,7 +240,7 @@ class SocialBehaviour:
         if self.avoid_predators:
             for pred in predators:
                 distance = boid.location.distance_to(pred.location)
-                if distance < 10:
+                if distance < BOID_PREDATOR_ALARM_RADIUS:
                     separation = boid.location - pred.location
                     change = separation * BOID_PREDATOR_AVOIDANCE
                     boid.adjustment += change
@@ -311,7 +313,6 @@ class FreeWill(IndividualRule):
     def apply(self, boid):
         if random.random() < FREE_WILL_CHANCE:
             rand = rand_vector3(lower=-1)
-            print("%s is going rogue" % boid.id)
             boid.adjustment += rand * FREE_WILL_WEIGHT
 
 
@@ -329,9 +330,8 @@ class PathFollow(IndividualRule):
         z = math.cos(math.pi * t)
 
         new_pos = (Vector3(x, y, z) * RADIUS)
-        # TODO could do adjustment = new_pos - old_pos
-        # boid.location = new_pos
-        boid.adjustment += new_pos - boid.location
+        boid.location = new_pos
+        # boid.adjustment += (new_pos - boid.location) * PREDATOR_PATH_WEIGHT
 
 
 class Attraction(IndividualRule):
@@ -632,8 +632,8 @@ def main():
         cube_max_vertex,
         [
             Bound,
-            # Wrap,
-            # FreeWill,
+            Wrap,
+            FreeWill,
             Attraction,
         ],
     )
@@ -642,7 +642,7 @@ def main():
         cube_min_vertex,
         cube_max_vertex,
         [
-            Bound,
+            # Bound,
             # Wrap,
             PathFollow,
         ],
