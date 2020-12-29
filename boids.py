@@ -397,7 +397,7 @@ class Boid:
 
     @staticmethod
     def decide_colour():
-        return rand_vector3(0.3, 0.7)
+        return rand_vector3(0.4, 1)
 
     def apply_behaviours(self, boids, predators):
         """
@@ -525,6 +525,8 @@ class Renderer:
         self.lines = self.make_vertical_lines(self.top_square, self.bottom_square)
 
         self.lights = lights
+        self.off_colour = (.1, .1, .1)
+        self.light_colour_history = [self.off_colour] * len(lights)
 
     @staticmethod
     def make_square_abstract(a, b, z):
@@ -598,21 +600,31 @@ class Renderer:
         else:
             self.render_boids()
 
-            for light in self.lights:
-                colour = self.calculate_light_colour(light)
+            for i, light in enumerate(self.lights):
+                colour = self.calculate_light_colour(i, light)
+                self.light_colour_history[i] = colour
                 self.render_point(colour, light)
 
-    def calculate_light_colour(self, light_location):
+    def calculate_light_colour(self, light_index, light_location):
         DIST_REQUIRED = RADIUS/10
 
+        prev_colour = self.light_colour_history[light_index]
+
         min_distance = RADIUS*100
-        colour_of_nearest = (.1, .1, .1)
+        colour_of_nearest = self.off_colour
         for boid in self.flock.boids:
             distance = light_location.distance_to(boid.location)
             if distance < min_distance and distance < DIST_REQUIRED:
                 min_distance = distance
                 colour_of_nearest = boid.colour
-        return colour_of_nearest
+
+        return self.average_of_colours(prev_colour, colour_of_nearest)
+
+    @staticmethod
+    def average_of_colours(c1, c2):
+        if c1 == c2:
+            return c1
+        return [z/len(c1) for z in [x+y for x, y in zip(c1, c2)]]
 
 
 class TreeLights:
