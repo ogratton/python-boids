@@ -16,7 +16,8 @@ import pygame
 import pygame.locals as pyg
 from OpenGL import GL, GLU
 
-CHRISTMAS_TREE_MODE = False
+# False to see all the boids, predators, and box
+CHRISTMAS_TREE_MODE = True
 
 COHESION_RANGE = 12
 ALIGNMENT_RANGE = 6
@@ -600,7 +601,7 @@ class Renderer:
             self.render_predators()
 
         else:
-            self.render_boids()
+            # self.render_boids()
 
             for i, light in enumerate(self.lights):
                 colour = self.calculate_light_colour(i, light)
