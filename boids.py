@@ -1,10 +1,9 @@
-# TODO fish shoal that avoids predators
-# Copyright (c) 2012 Tom Marble
-# Licensed under the MIT license http://opensource.org/licenses/MIT
-# https://github.com/tmarble/pyboids/blob/master/boids.py
-
-"""Implements the Peter Keller boids program
-which is an adaptation of
+"""
+Adapted from Tom Marble's pyboids:
+https://github.com/tmarble/pyboids
+which implements the Peter Keller boids program:
+http://pages.cs.wisc.edu/~psilord/lisp-public/boids.html
+which is an adaptation of Craig Reynolds's original algorithm:
 http://www.cs.toronto.edu/~dt/siggraph97-course/cwr87/
 """
 from __future__ import annotations
@@ -633,7 +632,7 @@ class TreeLights:
     def _transform_coords(coords):
         unit_scale = RADIUS / 260
         return [
-            Vector3(x * unit_scale, z * 0.6 * unit_scale, y * unit_scale)
+            Vector3(x * 0.7 * unit_scale, z * 0.6 * unit_scale, y * 0.7 * unit_scale)
             for x, y, z in coords
         ]
 
