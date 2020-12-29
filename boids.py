@@ -380,18 +380,18 @@ class Boid:
         self.id = b_id
         self.social_behaviour = social_behaviour
         self.individual_behaviour = individual_behaviour
-        self.color = self.decide_colour()
+        self.colour = self.decide_colour()
         self.location = starting_pos or zero_vector3()
         self.velocity = rand_vector3(-1.0, 1.0)
         self.adjustment = zero_vector3()  # to accumulate corrections
 
-        self.tick = random.randint(0, 1000)  # TODO
+        self.tick = random.randint(0, 1000)
 
     def __repr__(self):
         return "%s %s: color %s, location %s, velocity %s" % (
             self.__class__.__name__,
             self.id,
-            self.color,
+            self.colour,
             self.location,
             self.velocity,
         )
@@ -565,7 +565,7 @@ class Renderer:
     def render_boids(self):
         GL.glBegin(GL.GL_LINES)
         for boid in self.flock.boids:
-            GL.glColor(*boid.color)
+            GL.glColor(*boid.colour)
             GL.glVertex(*boid.location)
             if boid.velocity.length() > 0:
                 head = boid.location + boid.velocity.normalize() * BOID_RENDER_LENGTH
@@ -576,7 +576,7 @@ class Renderer:
 
     def render_predators(self):
         for pred in self.flock.predators:
-            self.render_point(pred.color, pred.location)
+            self.render_point(pred.colour, pred.location)
 
     @staticmethod
     def render_point(colour, location):
@@ -590,28 +590,29 @@ class Renderer:
         GL.glEnd()
 
     def render(self):
+
         if not self.lights:
             self.render_boundary()
             self.render_boids()
             self.render_predators()
 
         else:
-            # self.render_boids()
+            self.render_boids()
 
             for light in self.lights:
                 colour = self.calculate_light_colour(light)
                 self.render_point(colour, light)
 
     def calculate_light_colour(self, light_location):
-        DIST_REQUIRED = RADIUS/7  # TODO
+        DIST_REQUIRED = RADIUS/10
 
         min_distance = RADIUS*100
-        colour_of_nearest = (0, 0, 0)
+        colour_of_nearest = (.1, .1, .1)
         for boid in self.flock.boids:
             distance = light_location.distance_to(boid.location)
             if distance < min_distance and distance < DIST_REQUIRED:
                 min_distance = distance
-                colour_of_nearest = boid.color
+                colour_of_nearest = boid.colour
         return colour_of_nearest
 
 
